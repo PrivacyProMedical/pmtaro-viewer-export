@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en" class="scheme-dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Export & Anonymize</title>
+  <link href="./tailwind.min.css" rel="stylesheet">
+  <style>
+    body {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+    #app {
+      position: relative;
+      margin: auto 0;
+    }
+  </style>
+</head>
+<body class="bg-slate-900 text-white">
+  <div id="app" x-data="app" class="p-3">
+    <div class="container max-w-sm mx-auto">
+      <form class="flex flex-col" @submit.prevent="runExport">
+        <label class="flex flex-col mt-4">
+          <span>Export</span>
+          <input type="text" x-model="selectionName" readonly id="dropzone" :class="dragHover ? 'bg-slate-700' : 'bg-slate-800'" class="border-slate-500 rounded mt-1" placeholder="Drop target here…" />
+        </label>
+        <label class="flex flex-col mt-4">
+          <span>To</span>
+          <input type="text" x-model="exportRootDir" readonly class="bg-slate-800 border-slate-500 rounded mt-1" placeholder="Output path" :title="exportRootDir" @click="selectExportRootDir()" />
+        </label>
+        <label class="flex flex-col mt-4">
+          <span>Type</span>
+          <select x-model="exportType" class="bg-slate-800 border-slate-500 rounded mt-1">
+            <option value="0">.dcm</option>
+            <option value="100">.dcm - tag anonymized</option>
+            <option value="101">.dcm - tag + OCR anonymized</option>
+            <option value="200">.nii.gz</option>
+            <option value="300">.jpeg</option>
+            <option value="400">.mp4</option>
+          </select>
+        </label>
+        <br />
+        <button type="submit" class="inline-flex justify-center items-center text-center bg-sky-600 px-3 py-2 mt-4 mb-24 rounded hover:cursor-pointer disabled:cursor-not-allowed disabled:bg-sky-300/30 disabled:text-gray-300" :disabled="!selection || !exportRootDir || exporting">
+          <template x-if="exporting">
+            <svg class="mr-3 -ml-1 size-5 animate-spin text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+          </template>
+          <span x-text="exporting ? 'Exporting…' : 'Export'"></span>
+        </button>
+      </form>
+      <!-- <button @click="test('foo', 'bar')">test</button> -->
+    </div>
+  </div>
+
+  <script src="./alpinejs@3.15.8/dist/cdn.min.js" defer></script>
+  <script>
+    const app = document.getElementById('app');
+    let data = null;
+
+    document.addEventListener('alpine:init', () => {
+      Alpine.data('app', () => {
+        return {
+          _selection: null,
+          get selection() {
+            return this._selection;
+          },
+          get selectionName() {
+            return this._selection?.name ?? '';
+          },
+          set selection(val) {
+            this._selection = val;
+          },
+          dragHover: false,
+          dragTimeout: null,
+
+          exportRootDir: '',
+          exportType: '100',
+          exporting: false,
+          async runExport() {
+            if (this.exporting) return;
+            this.exporting = true;
+
+            const jsonUtf8Content = JSON.stringify(this.selection);
+            const exportRootDir = this.exportRootDir;
+            const exportType = parseInt(this.exportType);
+
+            try {
+              const res = await $electron?.api('@pmt/export/exportParsedStandardDirectory', jsonUtf8Content, exportRootDir, exportType);
+              if (res && typeof res === 'string') {
+                $electron?.showInFolder(res);
+              }
+            } catch (err) {
+              console.error(err);
+              if (err?.message) {
+                const msg = err.message.split(`@pmt/export/exportParsedStandardDirectory': `)[1] || err.message;
+                alert(msg);
+              }
+            } finally {
+              this.exporting = false;
+            }
+          },
+        };
+      });
+      setTimeout(() => {
+        data = app._x_dataStack[0];
+      }, 100);
+    });
+
+    window.addEventListener('DOMContentLoaded', () => $electron?.onLoaded());
+    window.addEventListener('message', async (e) => {
+      if (e.source !== window) {
+        return;
+      }
+      if (e.data?.type === 'load-args') {
+        const payload = e.data.args?.[0] ?? {};
+        if (payload?.from === 'patient' && payload.selection) {
+          console.log('load:', payload);
+          setTimeout(() => {
+            data.selection = payload.selection;
+          }, 200);
+        }
+      }
+    });
+    const dropzone = document.getElementById('dropzone');
+    dropzone.addEventListener('dragover', function (e) {
+      e.preventDefault();
+      data.dragHover = true;
+      if (data.dragTimeout !== null) {
+        clearTimeout(data.dragTimeout);
+        data.dragTimeout = null;
+      }
+    });
+    dropzone.addEventListener('dragleave', function (e) {
+      data.dragTimeout = setTimeout(() => {
+        data.dragHover = false;
+        data.dragTimeout = null;
+      }, 50);
+    });
+    dropzone.addEventListener('drop', function (e) {
+      e.preventDefault();
+      data.dragHover = false;
+      try {
+        const payload = JSON.parse(e.dataTransfer.getData('text') || 'null');
+        if (payload?.from === 'patient' && payload.selection) {
+          console.log('drop:', payload);
+          data.selection = payload.selection;
+        }
+      } catch (err) {}
+    });
+
+    async function selectExportRootDir() {
+      const { canceled, filePaths: fullPaths } = await $electron.showOpenDialog({
+        properties: ['openDirectory'],
+      });
+      if (!canceled && fullPaths[0]) {
+        data.exportRootDir = fullPaths[0];
+      } else {
+        data.exportRootDir = '';
+      }
+    }
+
+    function test() {
+      $electron?.api('@pmt/export/test', ...arguments).then(res => {
+        console.debug('api invoke:', "`@pmt/export/test`", res);
+      });
+    }
+  </script>
+</body>
+</html>
