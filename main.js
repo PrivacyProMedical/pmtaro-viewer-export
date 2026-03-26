@@ -59,8 +59,6 @@ const contextMenus = [
 
 export default {
   meta: {
-    name: 'Export & Anonymize',
-    version: '1.0.0',
     // ...
   },
   async setup(ctx = {/* __file__, __name__, __author__, __version__ */}, electronApp) {
