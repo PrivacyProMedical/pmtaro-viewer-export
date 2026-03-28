@@ -4,11 +4,11 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::dicom_deidentification::dicom_deidentification::deidentify_2d_dicom;
 use crate::dicom_deidentification::dicom_deidentification::deidentify_2d_dicom_with_ocr;
+use crate::process_utils::new_hidden_command;
 
 use crate::tools_path::{
     resolve_dcm2niix_path, resolve_dcmtk_bin_path, resolve_dcmtk_dictionary_path,
@@ -565,7 +565,7 @@ fn export_series_to_mp4(
 fn run_dcm2niix(input_dir: &Path, output_dir: &Path) -> napi::Result<()> {
     let binary_path = resolve_dcm2niix_path()?;
 
-    let output = Command::new(&binary_path)
+    let output = new_hidden_command(&binary_path)
         .arg("-o")
         .arg(output_dir)
         .arg("-z")
@@ -603,7 +603,7 @@ fn run_dcmdjpeg(
     let binary_path = resolve_dcmtk_bin_path("dcmdjpeg")?;
     let dictionary_path = resolve_dcmtk_dictionary_path()?;
 
-    let output = Command::new(&binary_path)
+    let output = new_hidden_command(&binary_path)
         .env("DCMDICTPATH", &dictionary_path)
         .arg(input_path)
         .arg(output_path)
@@ -642,7 +642,7 @@ fn run_dcm2img_jpeg(
     let dictionary_path = resolve_dcmtk_dictionary_path()?;
 
     // try +Wi 1
-    let try_with_voi_window = Command::new(&binary_path)
+    let try_with_voi_window = new_hidden_command(&binary_path)
         .env("DCMDICTPATH", &dictionary_path)
         .arg("+Wi")
         .arg("1")
@@ -663,7 +663,7 @@ fn run_dcm2img_jpeg(
     }
 
     // try +Wm
-    let try_with_min_max = Command::new(&binary_path)
+    let try_with_min_max = new_hidden_command(&binary_path)
         .env("DCMDICTPATH", &dictionary_path)
         .arg("+Wm")
         .arg("+oj")
@@ -711,7 +711,7 @@ fn run_ffmpeg_jpeg_to_mp4(
     let input_pattern = input_frames_dir.join("%08d.jpg");
 
     let ffmpeg_path = resolve_ffmpeg_path()?;
-    let output = Command::new(&ffmpeg_path)
+    let output = new_hidden_command(&ffmpeg_path)
         .arg("-y")
         .arg("-framerate")
         .arg("10")

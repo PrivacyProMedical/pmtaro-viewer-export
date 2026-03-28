@@ -1,6 +1,7 @@
 #![deny(clippy::all)]
 
 mod export_standard_directory;
+mod process_utils;
 mod tools_path;
 mod dicom_deidentification {
     pub mod dicom_deidentification;

@@ -4,9 +4,9 @@ use std::env;
 use std::fs;
 use std::io::Cursor;
 use std::path::PathBuf;
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::process_utils::new_hidden_command;
 use crate::tools_path::{resolve_newbee_ocr_binary_path, resolve_newbee_ocr_models_path};
 
 #[derive(Clone, Copy, Debug)]
@@ -81,7 +81,7 @@ pub fn run_ocr(image: &DynamicImage) -> Result<Vec<OcrTextBox>, String> {
         )
     })?;
 
-    let output = Command::new(&binary_path)
+    let output = new_hidden_command(&binary_path)
         .arg("r")
         .arg(&input_path)
         .arg("-m")
