@@ -46,6 +46,35 @@
             <option value="400">.mp4</option>
           </select>
         </label>
+
+        <!-- Label filter — shown when selection has descendants and labels are defined -->
+        <div class="flex flex-col mt-4" x-show="selection && selection.slot !== 'instance' && Object.keys(allLabels).length > 0">
+          <span>Filter by Labels</span>
+          <div class="flex flex-col gap-1 mt-1 bg-slate-800 border border-slate-500 rounded p-2 max-h-36 overflow-y-auto">
+            <template x-for="entry in Object.entries(allLabels)" :key="entry[0]">
+              <label class="flex items-center gap-2 cursor-pointer select-none">
+                <input type="checkbox" :value="entry[0]" x-model="filterLabels" class="accent-sky-500 shrink-0 rounded" />
+                <span class="inline-block w-3 h-3 rounded-full shrink-0" :style="`background-color: ${entry[1]}`"></span>
+                <span x-text="entry[0]" class="text-sm truncate"></span>
+              </label>
+            </template>
+          </div>
+          <div class="flex gap-2 mt-2" x-show="filterLabels.length > 0">
+            <button type="button"
+              @click="filterMode = 'include'"
+              :class="filterMode === 'include' ? 'bg-green-600 text-white' : 'bg-slate-700 text-slate-300'"
+              class="flex-1 px-2 py-1 rounded text-sm transition-colors">
+              Include only
+            </button>
+            <button type="button"
+              @click="filterMode = 'exclude'"
+              :class="filterMode === 'exclude' ? 'bg-red-600 text-white' : 'bg-slate-700 text-slate-300'"
+              class="flex-1 px-2 py-1 rounded text-sm transition-colors">
+              Exclude
+            </button>
+          </div>
+        </div>
+
         <br />
         <button type="submit" class="inline-flex justify-center items-center text-center bg-sky-600 px-3 py-2 mt-4 mb-24 rounded hover:cursor-pointer disabled:cursor-not-allowed disabled:bg-sky-300/30 disabled:text-gray-300" :disabled="!selection || !exportRootDir || exporting">
           <template x-if="exporting">
@@ -63,21 +92,109 @@
     const app = document.getElementById('app');
     let data = null;
 
+    // -------------------------------------------------------------------------
+    // Label filtering helpers
+    // -------------------------------------------------------------------------
+    function buildDataKey(root, keys) {
+      return [root, ...keys].join('|||');
+    }
+
+    function isLabeledOrAncestorLabeled(root, keyPath, labeledKeys) {
+      for (let i = 1; i <= keyPath.length; i++) {
+        if (labeledKeys.has(buildDataKey(root, keyPath.slice(0, i)))) return true;
+      }
+      return false;
+    }
+
+    function filterSelectionByLabels(payload, rows, selectedLabels, mode) {
+      if (!selectedLabels.size) return payload.selection;
+      const root = payload.root;
+      const baseKeys = payload.keys;
+      const sel = payload.selection;
+      const labeledKeys = new Set(
+        rows.filter(r => selectedLabels.has(r.label)).map(r => r.data)
+      );
+      function shouldKeep(keyPath) {
+        const labeled = isLabeledOrAncestorLabeled(root, keyPath, labeledKeys);
+        return mode === 'include' ? labeled : !labeled;
+      }
+      if (sel.slot === 'series') {
+        const instances = {};
+        for (const [k, v] of Object.entries(sel.instances ?? {})) {
+          if (shouldKeep([...baseKeys, k])) instances[k] = v;
+        }
+        return { ...sel, instances, instancesInOrder: (sel.instancesInOrder ?? []).filter(o => instances[o.key]) };
+      }
+      if (sel.slot === 'study') {
+        const series = {};
+        for (const [sk, sv] of Object.entries(sel.series ?? {})) {
+          const instances = {};
+          for (const [k, v] of Object.entries(sv.instances ?? {})) {
+            if (shouldKeep([...baseKeys, sk, k])) instances[k] = v;
+          }
+          if (Object.keys(instances).length > 0) {
+            series[sk] = { ...sv, instances, instancesInOrder: (sv.instancesInOrder ?? []).filter(o => instances[o.key]) };
+          }
+        }
+        return { ...sel, series, seriesInOrder: (sel.seriesInOrder ?? []).filter(o => series[o.key]) };
+      }
+      if (sel.slot === 'patient') {
+        const studies = {};
+        for (const [stk, stv] of Object.entries(sel.studies ?? {})) {
+          const series = {};
+          for (const [sk, sv] of Object.entries(stv.series ?? {})) {
+            const instances = {};
+            for (const [k, v] of Object.entries(sv.instances ?? {})) {
+              if (shouldKeep([...baseKeys, stk, sk, k])) instances[k] = v;
+            }
+            if (Object.keys(instances).length > 0) {
+              series[sk] = { ...sv, instances, instancesInOrder: (sv.instancesInOrder ?? []).filter(o => instances[o.key]) };
+            }
+          }
+          if (Object.keys(series).length > 0) {
+            studies[stk] = { ...stv, series, seriesInOrder: (stv.seriesInOrder ?? []).filter(o => series[o.key]) };
+          }
+        }
+        return { ...sel, studies, studiesInOrder: (sel.studiesInOrder ?? []).filter(o => studies[o.key]) };
+      }
+      return sel;
+    }
+    // -------------------------------------------------------------------------
+
     document.addEventListener('alpine:init', () => {
       Alpine.data('app', () => {
         return {
-          _selection: null,
+          _payload: null,
           get selection() {
-            return this._selection;
+            return this._payload?.selection ?? null;
           },
           get selectionName() {
-            return this._selection?.name ?? '';
+            return this._payload?.selection?.name ?? '';
           },
           set selection(val) {
-            this._selection = val;
+            if (this._payload) {
+              this._payload = { ...this._payload, selection: val };
+            } else {
+              this._payload = { selection: val };
+            }
           },
+          setPayload(payload) {
+            this._payload = payload;
+            this.filterLabels = [];
+            this.labelingRows = [];
+            if (payload?.root) {
+              $electron?.getLabels().then(labels => { this.allLabels = labels ?? {}; });
+              $electron?.getLabelingForRoot(payload.root).then(rows => { this.labelingRows = rows ?? []; });
+            }
+          },
+
           dragHover: false,
           dragTimeout: null,
+
+          allLabels: {},
+          labelingRows: [],
+          filterLabels: [],
+          filterMode: 'include',
 
           exportRootDir: '',
           exportType: '100',
@@ -86,7 +203,20 @@
             if (this.exporting) return;
             this.exporting = true;
 
-            const jsonUtf8Content = JSON.stringify(this.selection);
+            const payload = this._payload;
+            let selectionToExport = payload?.selection;
+
+            // Apply label filter for non-instance slots
+            if (selectionToExport?.slot !== 'instance' && this.filterLabels.length > 0) {
+              selectionToExport = filterSelectionByLabels(
+                payload,
+                this.labelingRows,
+                new Set(this.filterLabels),
+                this.filterMode
+              );
+            }
+
+            const jsonUtf8Content = JSON.stringify(selectionToExport);
             const exportRootDir = this.exportRootDir;
             const exportType = parseInt(this.exportType);
 
@@ -120,9 +250,8 @@
       if (e.data?.type === 'load-args') {
         const payload = e.data.args?.[0] ?? {};
         if (payload?.from === 'patient' && payload.selection) {
-          console.log('load:', payload);
           setTimeout(() => {
-            data.selection = payload.selection;
+            data.setPayload(payload);
           }, 200);
         }
       }
@@ -147,9 +276,9 @@
       data.dragHover = false;
       try {
         const payload = JSON.parse(e.dataTransfer.getData('text') || 'null');
+        console.log('drop:', payload);
         if (payload?.from === 'patient' && payload.selection) {
-          console.log('drop:', payload);
-          data.selection = payload.selection;
+          data.setPayload(payload);
         }
       } catch (err) {}
     });
