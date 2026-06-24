@@ -5,7 +5,7 @@ use dicom::core::{Tag, VR};
 use dicom::object::{open_file, DefaultDicomObject, InMemDicomObject};
 use dicom_pixeldata::{ConvertOptions, ModalityLutOption, PixelDecoder, VoiLutOption};
 use image::DynamicImage;
-// use napi_derive::napi;
+use napi_derive::napi;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::Path;
@@ -140,6 +140,16 @@ fn action_from_basic_profile(value: &str) -> Option<DeidAction> {
     }
     None
 }
+// Parse de-identification action from a single-letter custom config value
+fn action_from_custom_value(value: &str) -> Option<DeidAction> {
+    match value.trim().to_uppercase().as_str() {
+        "X" => Some(DeidAction::Remove),
+        "Z" => Some(DeidAction::Zero),
+        "D" => Some(DeidAction::Dummy),
+        "U" => Some(DeidAction::Uid),
+        _ => None,
+    }
+}
 
 // Parse a tag pattern string
 fn parse_tag_pattern(raw: &str) -> Option<TagPattern> {
@@ -227,6 +237,35 @@ fn load_rules() -> Vec<Rule> {
     }
 
     rules
+}
+
+// Apply custom de-identification tag overrides to the rules list.
+// Custom config JSON: {"(0008,0050)": "X", "(0010,0010)": "K", ...}
+// "K" (keep) removes the default rule so the tag stays untouched.
+fn apply_custom_rules(rules: &mut Vec<Rule>, custom_config_json: &str) {
+    let Ok(custom_map) =
+        serde_json::from_str::<std::collections::HashMap<String, String>>(custom_config_json)
+    else {
+        return;
+    };
+    for (tag_str, action_str) in &custom_map {
+        let action_trimmed = action_str.trim().to_uppercase();
+        let Some(pattern) = parse_tag_pattern(tag_str) else {
+            continue;
+        };
+        let TagPattern::Exact(exact_tag) = &pattern else {
+            continue;
+        };
+        // Remove any existing rule whose pattern matches this exact tag
+        rules.retain(|r| !r.pattern.matches(*exact_tag));
+        // "K" means keep — just remove the default rule, don't add a new one
+        if action_trimmed == "K" {
+            continue;
+        }
+        if let Some(action) = action_from_custom_value(action_str) {
+            rules.push(Rule { pattern, action });
+        }
+    }
 }
 
 // Map a UID or UID list to anonymized UID values
@@ -914,6 +953,47 @@ fn ocr_and_redact_pixel_data(
     Ok(())
 }
 
+/// Return the de-identification table as a JSON array:
+/// [{"name": "Accession Number", "tag": "(0008,0050)", "action": "Z"}, ...]
+#[napi]
+pub fn get_deid_table() -> String {
+    let mut entries = Vec::new();
+    let mut reader = ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(DEID_TABLE.as_bytes());
+
+    let headers = match reader.headers() {
+        Ok(h) => h.clone(),
+        Err(_) => return "[]".to_string(),
+    };
+
+    let name_idx = headers
+        .iter()
+        .position(|h| h == "Attribute Name")
+        .unwrap_or(0);
+    let tag_idx = headers
+        .iter()
+        .position(|h| h == "Tag")
+        .unwrap_or(0);
+    let basic_idx = headers
+        .iter()
+        .position(|h| h == "Basic Prof.")
+        .unwrap_or(0);
+
+    for record in reader.records() {
+        let Ok(record) = record else {
+            continue;
+        };
+        entries.push(serde_json::json!({
+            "name": record.get(name_idx).unwrap_or(""),
+            "tag": record.get(tag_idx).unwrap_or(""),
+            "action": record.get(basic_idx).unwrap_or("")
+        }));
+    }
+
+    serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_string())
+}
+
 // Update UID fields in DICOM meta information
 fn update_meta_uids(obj: &mut DefaultDicomObject, uid_map: &mut UidMapper) {
     let meta = obj.meta_mut();
@@ -927,7 +1007,11 @@ fn update_meta_uids(obj: &mut DefaultDicomObject, uid_map: &mut UidMapper) {
 
 // tag De-identify a 2D DICOM file
 // #[napi]
-pub fn deidentify_2d_dicom(src_dcm_path: String, dst_dcm_path: String) -> Result<(), String> {
+pub fn deidentify_2d_dicom(
+    src_dcm_path: String,
+    dst_dcm_path: String,
+    custom_deid_config_json: Option<String>,
+) -> Result<(), String> {
     let path = Path::new(&src_dcm_path);
     let mut obj = match open_file(path) {
         Ok(obj) => obj,
@@ -939,7 +1023,10 @@ pub fn deidentify_2d_dicom(src_dcm_path: String, dst_dcm_path: String) -> Result
         }
     };
 
-    let rules = load_rules();
+    let mut rules = load_rules();
+    if let Some(config) = &custom_deid_config_json {
+        apply_custom_rules(&mut rules, config);
+    }
     let mut uid_map = UidMapper::new();
     let deid_list = build_deid_list(&mut *obj, &rules, &mut uid_map);
     let mut deid_list_for_apply = deid_list.clone();
@@ -961,6 +1048,7 @@ pub fn deidentify_2d_dicom(src_dcm_path: String, dst_dcm_path: String) -> Result
 pub fn deidentify_2d_dicom_with_ocr(
     src_dcm_path: String,
     dst_dcm_path: String,
+    custom_deid_config_json: Option<String>,
 ) -> Result<(), String> {
     let path = Path::new(&src_dcm_path);
     let mut obj = match open_file(path) {
@@ -973,7 +1061,10 @@ pub fn deidentify_2d_dicom_with_ocr(
         }
     };
 
-    let rules = load_rules();
+    let mut rules = load_rules();
+    if let Some(config) = &custom_deid_config_json {
+        apply_custom_rules(&mut rules, config);
+    }
     let mut uid_map = UidMapper::new();
     let deid_list = build_deid_list(&mut *obj, &rules, &mut uid_map);
     let mut deid_list_for_apply = deid_list.clone();

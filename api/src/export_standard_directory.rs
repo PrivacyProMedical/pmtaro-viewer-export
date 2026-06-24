@@ -103,6 +103,7 @@ pub fn export_parsed_standard_directory(
     json_utf8_content: String,
     export_root_dir: String,
     export_type: u32,
+    json_deid_config: Option<String>,
 ) -> napi::Result<String> {
     // Validate export root directory.
     let root_path = Path::new(&export_root_dir);
@@ -240,6 +241,7 @@ pub fn export_parsed_standard_directory(
                     deidentify_2d_dicom(
                         instance.file_path.clone(),
                         dst.to_string_lossy().to_string(),
+                        json_deid_config.clone(),
                     )
                     .map_err(napi::Error::from_reason)?;
                     continue;
@@ -250,6 +252,7 @@ pub fn export_parsed_standard_directory(
                     deidentify_2d_dicom_with_ocr(
                         instance.file_path.clone(),
                         dst.to_string_lossy().to_string(),
+                        json_deid_config.clone(),
                     )
                     .map_err(napi::Error::from_reason)?;
                     continue;

@@ -11,4 +11,10 @@
  * - 300: Convert each instance to JPEG via dcm2img
  * - 400: Convert each series to MP4 via dcm2img (frames) + ffmpeg
  */
-export declare function exportParsedStandardDirectory(jsonUtf8Content: string, exportRootDir: string, exportType: number): string
+export declare function exportParsedStandardDirectory(jsonUtf8Content: string, exportRootDir: string, exportType: number, jsonDeidConfig?: string | undefined | null): string
+
+/**
+ * Return the de-identification table as a JSON array:
+ * [{"name": "Accession Number", "tag": "(0008,0050)", "action": "Z"}, ...]
+ */
+export declare function getDeidTable(): string

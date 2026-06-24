@@ -48,6 +48,45 @@
         </label>
 
         <!-- Label filter — shown when selection has descendants and labels are defined -->
+        <!-- De-identification configuration -->
+        <div class="flex flex-col mt-4" x-show="showDeidConfig" x-data="deidConfigData()">
+          <label class="flex items-center gap-2 cursor-pointer select-none text-sm">
+            <input type="checkbox" x-model="enabled" class="accent-sky-500 rounded" />
+            <svg class="size-4 text-sky-400 shrink-0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s-8-4-8-10V5l8-3 8 3v7c0 6-8 10-8 10"/></svg>
+            <span class="font-medium">Customize de-identification</span>
+          </label>
+          <div x-show="enabled" class="mt-2 bg-slate-800 border border-slate-600 rounded p-2 max-h-96 overflow-hidden flex flex-col">
+            <div class="flex gap-1 mb-1 shrink-0">
+              <input type="text" x-model="searchQuery" placeholder="Search tag or name&#8230;" class="bg-slate-700 border-slate-500 rounded text-xs px-2 py-1 w-full" />
+              <span class="text-xs text-slate-400 whitespace-nowrap self-center" x-text="filteredCount() + ' / ' + tableData.length"></span>
+            </div>
+            <div class="flex gap-1 text-xs text-slate-400 font-medium mb-1 px-1 shrink-0">
+              <span class="w-32">Tag</span>
+              <span class="flex-1">Name</span>
+              <span class="w-20 text-right">Action</span>
+            </div>
+            <div class="overflow-y-auto flex-1 space-y-1">
+              <template x-for="(row, i) in filteredTags" :key="row.tag + i">
+                <div class="flex gap-1 items-center text-xs px-1 py-0.5 rounded">
+                  <span class="w-32 font-mono text-slate-300 truncate" x-text="row.tag"></span>
+                  <span class="flex-1 truncate text-slate-300" x-text="row.name"></span>
+                  <select x-model="overrides[row.tag]" class="bg-slate-700 border-slate-500 rounded text-xs px-1 py-0.5 w-20">
+                    <option :value="null">Default (<span x-text="row.action.split('/')[0]"></span>)</option>
+                    <option value="K">Keep (K)</option>
+                    <option value="X">Remove (X)</option>
+                    <option value="Z">Zero (Z)</option>
+                    <option value="D">Dummy (D)</option>
+                    <option value="U">UID (U)</option>
+                  </select>
+                </div>
+              </template>
+            </div>
+            <div class="flex justify-between items-center mt-1 pt-1 border-t border-slate-700 shrink-0">
+              <span class="text-xs text-slate-400" x-text="customizedCount() > 0 ? customizedCount() + ' tag(s) customized' : 'Using default configuration'"></span>
+              <button type="button" @click="resetOverrides()" class="text-xs text-sky-400 hover:text-sky-300" x-show="customizedCount() > 0">Reset all</button>
+            </div>
+          </div>
+        </div>
         <div class="flex flex-col mt-4" x-show="selection && selection.slot !== 'instance' && Object.keys(allLabels).length > 0">
           <span>Filter by Labels</span>
           <div class="flex flex-col gap-1 mt-1 bg-slate-800 border border-slate-500 rounded p-2 max-h-36 overflow-y-auto">
@@ -196,6 +235,9 @@
           filterLabels: [],
           filterMode: 'include',
 
+          get showDeidConfig() {
+            return this.exportType === '100' || this.exportType === '101';
+          },
           exportRootDir: '',
           exportType: '100',
           exporting: false,
@@ -219,9 +261,27 @@
             const jsonUtf8Content = JSON.stringify(selectionToExport);
             const exportRootDir = this.exportRootDir;
             const exportType = parseInt(this.exportType);
+            // Read custom de-identification overrides from the config panel (if visible)
+            let deidConfigStr = null;
+            const panelEl = this.$el.querySelector('[x-data="deidConfigData()"]');
+            if (panelEl) {
+              try {
+                const panelData = Alpine.$data(panelEl);
+                if (panelData?.enabled && panelData?.overrides) {
+                  const keys = Object.keys(panelData.overrides).filter(k => panelData.overrides[k] !== null);
+                  if (keys.length > 0) {
+                    const clean = {};
+                    for (const k of keys) clean[k] = panelData.overrides[k];
+                    deidConfigStr = JSON.stringify(clean);
+                  }
+                }
+              } catch(e) {
+                console.warn('Failed to read deid config:', e);
+              }
+            }
 
             try {
-              const res = await $electron?.api('@pmt/export/exportParsedStandardDirectory', jsonUtf8Content, exportRootDir, exportType);
+              const res = await $electron?.api('@pmt/export/exportParsedStandardDirectory', jsonUtf8Content, exportRootDir, exportType, deidConfigStr);
               if (res && typeof res === 'string') {
                 $electron?.showInFolder(res);
               }
@@ -240,6 +300,49 @@
       setTimeout(() => {
         data = app._x_dataStack[0];
       }, 100);
+    });
+    // -------------------------------------------------------------------------
+    // De-identification configuration panel
+    // -------------------------------------------------------------------------
+    document.addEventListener('alpine:init', () => {
+      Alpine.data('deidConfigData', () => ({
+        enabled: false,
+        searchQuery: '',
+        tableData: [],
+        overrides: {},
+
+        async init() {
+          try {
+            const json = await $electron?.api('@pmt/export/getDeidTable');
+            if (json && typeof json === 'string') {
+              const parsed = JSON.parse(json);
+              if (Array.isArray(parsed)) this.tableData = parsed;
+            }
+          } catch (e) {
+            console.error('Failed to load deid table:', e);
+          }
+        },
+
+        get filteredTags() {
+          const q = this.searchQuery.toLowerCase().trim();
+          if (!q) return this.tableData;
+          return this.tableData.filter(r =>
+            r.tag.toLowerCase().includes(q) || r.name.toLowerCase().includes(q)
+          );
+        },
+
+        filteredCount() {
+          return this.filteredTags.length;
+        },
+
+        customizedCount() {
+          return Object.keys(this.overrides).filter(k => this.overrides[k] !== null).length;
+        },
+
+        resetOverrides() {
+          this.overrides = {};
+        },
+      }));
     });
 
     window.addEventListener('DOMContentLoaded', () => $electron?.onLoaded());
