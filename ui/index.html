@@ -274,6 +274,8 @@
     dropzone.addEventListener('drop', function (e) {
       e.preventDefault();
       data.dragHover = false;
+      // Notify Electron that this window received the drop
+      $electron?.notifyDrop?.();
       try {
         const payload = JSON.parse(e.dataTransfer.getData('text') || 'null');
         console.log('drop:', payload);
