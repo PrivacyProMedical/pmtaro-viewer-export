@@ -79,6 +79,17 @@ struct InstanceNode {
     file_path: String,
 }
 
+/// Format-specific configuration passed as a JSON string from the frontend.
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct FormatConfig {
+    structure: Option<String>,
+    sub_format: Option<String>,
+    fps: Option<u32>,
+    quality: Option<String>,
+}
+
+
 #[repr(u32)]
 enum DeidentifyExportType {
     Copy = 0,
@@ -96,14 +107,16 @@ enum DeidentifyExportType {
 /// - 0: Copy original DICOM files
 /// - 100: De-identify with tags only and export DICOM files
 /// - 101: De-identify with tags + OCR and export DICOM files
-/// - 200: Convert each series to NIfTI via dcmdjpeg + dcm2niix
-/// - 300: Convert each instance to JPEG via dcm2img
-/// - 400: Convert each series to MP4 via dcm2img (frames) + ffmpeg
+/// Format-specific options (json_format_config):
+/// For NIfTI (200): { "structure": "4d"/"3d" }
+/// For Image (300): only JPEG output (no sub-format options)
+/// For MP4 (400): { "fps": 24, "quality": "high"/"medium"/"low" }
 pub fn export_parsed_standard_directory(
     json_utf8_content: String,
     export_root_dir: String,
     export_type: u32,
     json_deid_config: Option<String>,
+    json_format_config: Option<String>,
 ) -> napi::Result<String> {
     // Validate export root directory.
     let root_path = Path::new(&export_root_dir);
@@ -125,6 +138,15 @@ pub fn export_parsed_standard_directory(
             napi::Error::from_reason(format!("Failed to parse input JSON string: {}", e))
         })?;
     let (input_level, parsed) = normalize_parsed_directory(parsed_input)?;
+
+    let format_config: FormatConfig = match json_format_config {
+        Some(ref json) if !json.is_empty() => {
+            serde_json::from_str(json).map_err(|e| {
+                napi::Error::from_reason(format!("Failed to parse format config JSON: {}", e))
+            })?
+        }
+        _ => FormatConfig::default(),
+    };
 
     let output_root_dir = if input_level == 1 {
         create_unique_subdir(
@@ -189,22 +211,19 @@ pub fn export_parsed_standard_directory(
                     )));
                 }
 
-                export_series_to_nifti(series, &series_output_dir)?;
+                export_series_to_nifti(series, &series_output_dir, &format_config)?;
                 continue;
             }
 
             // mp4
             // convert whole series to MP4 and continue.
             if export_type == DeidentifyExportType::Mp4 as u32 {
-                export_series_to_mp4(
-                    series,
-                    &series_output_dir
-                )?;
+                export_series_to_mp4(series, &series_output_dir, &format_config)?;
                 continue;
             }
 
             // copy, de-identify, or jpeg exports
-            // Types 0/1/3: process instance-by-instance.
+            // Types 0/100/101/300: process instance-by-instance.
             for instance_ref in ordered_keys(&series.instances, &series.instances_in_order) {
                 let instance = series.instances.get(&instance_ref.key).ok_or_else(|| {
                     napi::Error::from_reason(format!(
@@ -258,15 +277,15 @@ pub fn export_parsed_standard_directory(
                     continue;
                 }
 
-                // jpeg
+                // image export (JPEG only)
                 if export_type == DeidentifyExportType::Jpeg as u32 {
                     let base_name = Path::new(&instance.file_name)
                         .file_stem()
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_else(|| non_empty_or_default(&instance.file_name, "instance"));
-                    let jpeg_file_name = format!("{}.jpg", base_name);
-                    let jpeg_dst = series_output_dir.join(jpeg_file_name);
-                    run_dcm2img_jpeg(src, &jpeg_dst)?;
+                    let img_file_name = format!("{}.jpg", base_name);
+                    let img_dst = series_output_dir.join(img_file_name);
+                    run_dcm2img_jpeg(src, &img_dst)?;
                     continue;
                 }
 
@@ -437,7 +456,11 @@ fn ordered_keys<T>(items: &HashMap<String, T>, in_order: &[KeyRef]) -> Vec<KeyRe
 
 /// Converts one series to NIfTI by first normalizing DICOM files with dcmdjpeg,
 /// then invoking dcm2niix on a temporary input directory.
-fn export_series_to_nifti(series: &SeriesNode, series_dir: &Path) -> napi::Result<()> {
+fn export_series_to_nifti(
+    series: &SeriesNode,
+    series_dir: &Path,
+    format_config: &FormatConfig,
+) -> napi::Result<()> {
     let temp_input_dir = create_temp_series_input_dir()?;
 
     let convert_result = (|| -> napi::Result<()> {
@@ -466,7 +489,7 @@ fn export_series_to_nifti(series: &SeriesNode, series_dir: &Path) -> napi::Resul
             run_dcmdjpeg(src, &temp_dst)?;
         }
 
-        run_dcm2niix(&temp_input_dir, series_dir)
+        run_dcm2niix(&temp_input_dir, series_dir, format_config)
     })();
 
     if temp_input_dir.exists() {
@@ -526,10 +549,7 @@ fn create_temp_series_frames_dir() -> napi::Result<PathBuf> {
 
 /// Converts one series into a single MP4 file by generating ordered JPEG frames
 /// with dcm2img and then encoding them with ffmpeg.
-fn export_series_to_mp4(
-    series: &SeriesNode,
-    series_dir: &Path,
-) -> napi::Result<()> {
+fn export_series_to_mp4(series: &SeriesNode, series_dir: &Path, format_config: &FormatConfig) -> napi::Result<()> {
     let temp_frames_dir = create_temp_series_frames_dir()?;
 
     let convert_result = (|| -> napi::Result<()> {
@@ -554,7 +574,7 @@ fn export_series_to_mp4(
         }
 
         let mp4_output = series_dir.join("series.mp4");
-        run_ffmpeg_jpeg_to_mp4(&temp_frames_dir, &mp4_output)
+        run_ffmpeg_jpeg_to_mp4(&temp_frames_dir, &mp4_output, format_config)
     })();
 
     if temp_frames_dir.exists() {
@@ -565,23 +585,35 @@ fn export_series_to_mp4(
 }
 
 /// Runs dcm2niix to convert a DICOM directory into NIfTI outputs.
-fn run_dcm2niix(input_dir: &Path, output_dir: &Path) -> napi::Result<()> {
+fn run_dcm2niix(
+    input_dir: &Path,
+    output_dir: &Path,
+    format_config: &FormatConfig,
+) -> napi::Result<()> {
     let binary_path = resolve_dcm2niix_path()?;
 
-    let output = new_hidden_command(&binary_path)
-        .arg("-o")
-        .arg(output_dir)
-        .arg("-z")
-        .arg("y")
-        .arg(input_dir)
-        .output()
-        .map_err(|e| {
-            napi::Error::from_reason(format!(
-                "Failed to execute dcm2niix '{}': {}",
-                binary_path.to_string_lossy(),
-                e
-            ))
-        })?;
+    let mut cmd = new_hidden_command(&binary_path);
+    cmd.arg("-o").arg(output_dir).arg("-z").arg("y");
+
+    // Structure: 4D merge vs 3D individual volumes
+    // -m n = do not merge, each slice exported as separate 3D volume
+    // -m y = merge all slices into a single 4D volume
+    // dcm2niix default is -m 2 (auto-merge)
+    match format_config.structure.as_deref() {
+        Some("3d") => { cmd.arg("-m").arg("n"); }
+        Some("4d") => { cmd.arg("-m").arg("y"); }
+        _ => {}
+    }
+
+    cmd.arg(input_dir);
+
+    let output = cmd.output().map_err(|e| {
+        napi::Error::from_reason(format!(
+            "Failed to execute dcm2niix '{}': {}",
+            binary_path.to_string_lossy(),
+            e
+        ))
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -704,37 +736,49 @@ fn run_dcm2img_jpeg(
     Ok(())
 }
 
-/// Runs ffmpeg to encode sequential JPEG frames into an H.264 MP4 file.
+/// Runs ffmpeg to encode sequential JPEG frames into an MP4 file.
 ///
-/// The pad filter ensures width/height are even so libx264 can encode safely.
+/// The pad filter ensures width/height are even so libx264/libx265 can encode safely.
 fn run_ffmpeg_jpeg_to_mp4(
     input_frames_dir: &Path,
     output_mp4_path: &Path,
+    format_config: &FormatConfig,
 ) -> napi::Result<()> {
     let input_pattern = input_frames_dir.join("%08d.jpg");
+    let fps = format_config.fps.unwrap_or(24).max(1);
+    let (codec, extra_flags): (&str, Vec<&str>) = match format_config.quality.as_deref() {
+        Some("high") => ("libx264", vec!["-crf", "0", "-preset", "fast"]),
+        Some("low")  => ("libx265", vec!["-crf", "28", "-preset", "medium", "-tag:v", "hvc1"]),
+        _            => ("libx264", vec!["-crf", "23", "-preset", "medium"]),
+    };
 
     let ffmpeg_path = resolve_ffmpeg_path()?;
-    let output = new_hidden_command(&ffmpeg_path)
-        .arg("-y")
+    let mut cmd = new_hidden_command(&ffmpeg_path);
+    cmd.arg("-y")
         .arg("-framerate")
-        .arg("10")
+        .arg(fps.to_string())
         .arg("-i")
         .arg(&input_pattern)
         .arg("-vf")
         .arg("pad=width=ceil(iw/2)*2:height=ceil(ih/2)*2:x=0:y=0:color=black")
         .arg("-c:v")
-        .arg("libx264")
-        .arg("-pix_fmt")
-        .arg("yuv420p")
-        .arg(output_mp4_path)
-        .output()
-        .map_err(|e| {
-            napi::Error::from_reason(format!(
-                "Failed to execute ffmpeg '{}': {}",
-                ffmpeg_path.to_string_lossy(),
-                e
-            ))
-        })?;
+        .arg(codec);
+
+    for flag in &extra_flags {
+        cmd.arg(flag);
+    }
+
+    cmd.arg("-r").arg(fps.to_string());
+    cmd.arg("-pix_fmt").arg("yuv420p");
+    cmd.arg(output_mp4_path);
+
+    let output = cmd.output().map_err(|e| {
+        napi::Error::from_reason(format!(
+            "Failed to execute ffmpeg '{}': {}",
+            ffmpeg_path.to_string_lossy(),
+            e
+        ))
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

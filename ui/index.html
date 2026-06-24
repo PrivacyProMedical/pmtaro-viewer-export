@@ -18,15 +18,14 @@
     }
     #app {
       position: relative;
-      margin: auto 0;
       overflow: auto;
     }
   </style>
 </head>
 <body class="bg-slate-900 text-white">
-  <div id="app" x-data="app" class="p-3">
-    <div class="container max-w-sm mx-auto">
-      <form class="flex flex-col" @submit.prevent="runExport">
+  <div id="app" x-data="app" class="flex flex-col" style="height: 100%; min-width: 400px">
+    <div class="flex-1 overflow-auto p-3">
+      <form class="flex flex-col" style="min-width: 400px" @submit.prevent="runExport">
         <label class="flex flex-col mt-4">
           <span>Export</span>
           <input type="text" x-model="selectionName" readonly id="dropzone" :class="dragHover ? 'bg-slate-700' : 'bg-slate-800'" class="border-slate-500 rounded mt-1" placeholder="Drop target here…" />
@@ -36,23 +35,76 @@
           <input type="text" x-model="exportRootDir" readonly class="bg-slate-800 border-slate-500 rounded mt-1" placeholder="Output path" :title="exportRootDir" @click="selectExportRootDir()" />
         </label>
         <label class="flex flex-col mt-4">
-          <span>Type</span>
-          <select x-model="exportType" class="bg-slate-800 border-slate-500 rounded mt-1">
-            <option value="0">.dcm</option>
-            <option value="100">.dcm - tag anonymized</option>
-            <option value="101">.dcm - tag + OCR anonymized</option>
-            <option value="200">.nii.gz</option>
-            <option value="300">.jpeg</option>
-            <option value="400">.mp4</option>
+          <span class="font-medium text-slate-200">Format</span>
+          <select x-model="selectedFormat" class="bg-slate-800 border-slate-500 rounded mt-1">
+            <option value="dicom">DICOM (.dcm)</option>
+            <option value="nifti">NIfTI (.nii.gz)</option>
+            <option value="more">More Formats</option>
           </select>
         </label>
+
+        <div class="mt-4 border border-slate-600 rounded p-3 min-h-[80px] flex flex-col justify-center">
+
+          <div x-show="selectedFormat === &apos;dicom&apos;" class="flex flex-col gap-1.5 text-sm">
+            <label class="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" x-model="dicomAnonymizeTags" @change="if(!dicomAnonymizeTags){ dicomOcrAnonymize=false; dicomCustomizeDeid=false; }" class="accent-sky-500 rounded shrink-0" />
+              <span>Anonymize Tags</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer select-none"
+                   :class="dicomAnonymizeTags ? &apos;&apos; : &apos;opacity-50 pointer-events-none&apos;">
+              <input type="checkbox" x-model="dicomOcrAnonymize" class="accent-sky-500 rounded shrink-0"
+                     :disabled="!dicomAnonymizeTags" />
+              <span>OCR Anonymize</span>
+            </label>
+          </div>
+
+          <div x-show="selectedFormat === &apos;nifti&apos;" class="flex flex-col gap-1.5 text-sm">
+            <div class="flex items-center gap-2">
+              <span class="w-28 shrink-0">Structure</span>
+              <select x-model="niftiStructure" class="bg-slate-800 border-slate-500 rounded text-xs flex-1 min-w-0 truncate">
+                <option value="4d">Merge to 4D volume (merge)</option>
+                <option value="3d">Export as 3D volumes (slice-wise)</option>
+              </select>
+              <span class="inline-flex items-center justify-center w-4 h-4 shrink-0"></span>
+            </div>
+          </div>
+
+          <div x-show="selectedFormat === &apos;more&apos;" class="flex flex-col gap-1.5 text-sm">
+            <div class="flex items-center gap-2">
+              <span class="w-28 shrink-0">Sub Format</span>
+              <select x-model="moreFormat" class="bg-slate-800 border-slate-500 rounded text-xs flex-1">
+                <option value="jpeg">JPEG (.jpeg)</option>
+                <option value="mp4">Video (.mp4)</option>
+              </select>
+            </div>
+
+            <div x-show="moreFormat === &apos;jpeg&apos;" class="flex items-center text-sm text-slate-400">
+              <span></span>
+            </div>
+
+            <div x-show="moreFormat === &apos;mp4&apos;" class="flex flex-col gap-1.5 text-sm">
+              <div class="flex items-center gap-2">
+                <span class="w-28 shrink-0">Frame Rate</span>
+                <input type="number" x-model.number="mp4Fps" min="1" max="120"
+                       class="bg-slate-800 border-slate-500 rounded text-xs w-20 px-2 py-1" />
+                <span class="text-xs text-slate-400">FPS</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="w-28 shrink-0">Encoding Quality</span>
+                <select x-model="mp4Quality" class="bg-slate-800 border-slate-500 rounded text-xs flex-1">
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select>
+            </div>
+          </div>
+        </div>
 
         <!-- Label filter — shown when selection has descendants and labels are defined -->
         <!-- De-identification configuration -->
         <div class="flex flex-col mt-4" x-show="showDeidConfig" x-data="deidConfigData()">
           <label class="flex items-center gap-2 cursor-pointer select-none text-sm">
             <input type="checkbox" x-model="enabled" class="accent-sky-500 rounded" />
-            <svg class="size-4 text-sky-400 shrink-0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s-8-4-8-10V5l8-3 8 3v7c0 6-8 10-8 10"/></svg>
             <span class="font-medium">Customize de-identification</span>
           </label>
           <div x-show="enabled" class="mt-2 bg-slate-800 border border-slate-600 rounded p-2 max-h-96 overflow-hidden flex flex-col">
@@ -62,14 +114,14 @@
             </div>
             <div class="flex gap-1 text-xs text-slate-400 font-medium mb-1 px-1 shrink-0">
               <span class="w-32">Tag</span>
-              <span class="flex-1">Name</span>
+              <span class="flex-1 min-w-0">Name</span>
               <span class="w-20 text-right">Action</span>
             </div>
             <div class="overflow-y-auto flex-1 space-y-1">
               <template x-for="(row, i) in filteredTags" :key="row.tag + i">
                 <div class="flex gap-1 items-center text-xs px-1 py-0.5 rounded">
                   <span class="w-32 font-mono text-slate-300 truncate" x-text="row.tag"></span>
-                  <span class="flex-1 truncate text-slate-300" x-text="row.name"></span>
+                  <span class="flex-1 min-w-0 truncate text-slate-300" x-text="row.name"></span>
                   <select x-model="overrides[row.tag]" class="bg-slate-700 border-slate-500 rounded text-xs px-1 py-0.5 w-20">
                     <option :value="null">Default (<span x-text="row.action.split('/')[0]"></span>)</option>
                     <option value="K">Keep (K)</option>
@@ -114,16 +166,18 @@
           </div>
         </div>
 
-        <br />
-        <button type="submit" class="inline-flex justify-center items-center text-center bg-sky-600 px-3 py-2 mt-4 mb-24 rounded hover:cursor-pointer disabled:cursor-not-allowed disabled:bg-sky-300/30 disabled:text-gray-300" :disabled="!selection || !exportRootDir || exporting">
+      </form>
+      </div>
+
+      <div class="bg-slate-800 border-t border-slate-600 p-3">
+        <button type="button" @click="runExport" class="flex justify-center items-center text-center bg-sky-600 px-3 py-2 rounded w-full hover:cursor-pointer disabled:cursor-not-allowed disabled:bg-sky-300/30 disabled:text-gray-300" :disabled="!selection || !exportRootDir || exporting">
           <template x-if="exporting">
             <svg class="mr-3 -ml-1 size-5 animate-spin text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
           </template>
-          <span x-text="exporting ? 'Exporting…' : 'Export'"></span>
+          <span x-text="exporting ? 'Exporting\u2026' : 'Export'"></span>
         </button>
-      </form>
-      <!-- <button @click="test('foo', 'bar')">test</button> -->
-    </div>
+      </div>
+
   </div>
 
   <script src="./alpinejs@3.15.8/dist/cdn.min.js" defer></script>
@@ -235,11 +289,36 @@
           filterLabels: [],
           filterMode: 'include',
 
-          get showDeidConfig() {
-            return this.exportType === '100' || this.exportType === '101';
+          get computedExportType() {
+            if (this.selectedFormat === 'dicom') {
+              if (this.dicomOcrAnonymize) return 101;
+              if (this.dicomAnonymizeTags) return 100;
+              return 0;
+            }
+            if (this.selectedFormat === 'nifti') return 200;
+            if (this.selectedFormat === 'more') {
+              if (this.moreFormat === 'jpeg') return 300;
+              if (this.moreFormat === 'mp4') return 400;
+            }
+            return 0;
           },
+          get showDeidConfig() {
+            return this.computedExportType === 100 || this.computedExportType === 101;
+          },
+          selectedFormat: 'dicom',
+
+          dicomAnonymizeTags: false,
+          dicomOcrAnonymize: false,
+          dicomCustomizeDeid: false,
+
+          niftiStructure: '4d',
+
+          moreFormat: 'jpeg',
+
+          mp4Fps: 24,
+          mp4Quality: 'medium',
+
           exportRootDir: '',
-          exportType: '100',
           exporting: false,
           async runExport() {
             if (this.exporting) return;
@@ -260,7 +339,7 @@
 
             const jsonUtf8Content = JSON.stringify(selectionToExport);
             const exportRootDir = this.exportRootDir;
-            const exportType = parseInt(this.exportType);
+            const exportType = this.computedExportType;
             // Read custom de-identification overrides from the config panel (if visible)
             let deidConfigStr = null;
             const panelEl = this.$el.querySelector('[x-data="deidConfigData()"]');
@@ -281,7 +360,20 @@
             }
 
             try {
-              const res = await $electron?.api('@pmt/export/exportParsedStandardDirectory', jsonUtf8Content, exportRootDir, exportType, deidConfigStr);
+                          // Build format-specific config
+            let jsonFormatConfig = null;
+            if (this.selectedFormat === 'nifti') {
+              jsonFormatConfig = JSON.stringify({
+                structure: this.niftiStructure,
+              });
+            } else if (this.selectedFormat === 'more' && this.moreFormat === 'mp4') {
+              jsonFormatConfig = JSON.stringify({
+                fps: this.mp4Fps,
+                quality: this.mp4Quality,
+              });
+            }
+
+            const res = await $electron?.api('@pmt/export/exportParsedStandardDirectory', jsonUtf8Content, exportRootDir, exportType, deidConfigStr, jsonFormatConfig);
               if (res && typeof res === 'string') {
                 $electron?.showInFolder(res);
               }

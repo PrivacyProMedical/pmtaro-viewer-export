@@ -7,11 +7,12 @@
  * - 0: Copy original DICOM files
  * - 100: De-identify with tags only and export DICOM files
  * - 101: De-identify with tags + OCR and export DICOM files
- * - 200: Convert each series to NIfTI via dcmdjpeg + dcm2niix
- * - 300: Convert each instance to JPEG via dcm2img
- * - 400: Convert each series to MP4 via dcm2img (frames) + ffmpeg
+ * Format-specific options (json_format_config):
+ * For NIfTI (200): { "structure": "4d"/"3d" }
+ * For Image (300): only JPEG output (no sub-format options)
+ * For MP4 (400): { "fps": 24, "quality": "high"/"medium"/"low" }
  */
-export declare function exportParsedStandardDirectory(jsonUtf8Content: string, exportRootDir: string, exportType: number, jsonDeidConfig?: string | undefined | null): string
+export declare function exportParsedStandardDirectory(jsonUtf8Content: string, exportRootDir: string, exportType: number, jsonDeidConfig?: string | undefined | null, jsonFormatConfig?: string | undefined | null): string
 
 /**
  * Return the de-identification table as a JSON array:
