@@ -576,5 +576,6 @@ if (!nativeBinding) {
 }
 
 module.exports = nativeBinding
+module.exports.exportMultimodalData = nativeBinding.exportMultimodalData
 module.exports.exportParsedStandardDirectory = nativeBinding.exportParsedStandardDirectory
 module.exports.getDeidTable = nativeBinding.getDeidTable

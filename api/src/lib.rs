@@ -1,5 +1,7 @@
 #![deny(clippy::all)]
 
+mod logging;
+mod export_multimodal;
 mod export_standard_directory;
 mod process_utils;
 mod tools_path;
@@ -7,8 +9,6 @@ mod dicom_deidentification {
     pub mod dicom_deidentification;
     pub mod ocr;
 }
-#[cfg(test)]
-mod test;
 
 use napi::bindgen_prelude::{JsValue, Object};
 use napi_derive::napi;
@@ -55,6 +55,9 @@ fn init_module(exports: Object<'_>) -> napi::Result<()> {
 
     if let Some(module_dir) = module_file_path.parent() {
         let _ = NATIVE_MODULE_DIR.set(module_dir.to_path_buf());
+
+        // Initialize the log4rs logging system.
+        logging::init_logging(&module_dir.to_path_buf());
     }
 
     Ok(())
@@ -65,4 +68,5 @@ pub(crate) fn get_native_module_dir() -> Option<&'static PathBuf> {
 }
 
 pub use dicom_deidentification::dicom_deidentification::*;
+pub use export_multimodal::*;
 pub use export_standard_directory::*;

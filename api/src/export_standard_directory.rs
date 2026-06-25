@@ -118,56 +118,74 @@ pub fn export_parsed_standard_directory(
     json_deid_config: Option<String>,
     json_format_config: Option<String>,
 ) -> napi::Result<String> {
+    log::info!(
+        "Starting export: type={}, root_dir={}",
+        export_type, export_root_dir
+    );
+
     // Validate export root directory.
     let root_path = Path::new(&export_root_dir);
     if !root_path.exists() {
+        log::error!("Root directory does not exist: {}", export_root_dir);
         return Err(napi::Error::from_reason(format!(
             "Export root directory does not exist: {}",
             export_root_dir
         )));
     }
     if !root_path.is_dir() {
+        log::error!("Root path is not a directory: {}", export_root_dir);
         return Err(napi::Error::from_reason(format!(
             "Export root path is not a directory: {}",
             export_root_dir
         )));
     }
 
+    log::info!("Parsing input JSON content ({} bytes)", json_utf8_content.len());
     let parsed_input: ParsedDirectoryJson =
         serde_json::from_str(&json_utf8_content).map_err(|e| {
+            log::error!("Failed to parse input JSON: {}", e);
             napi::Error::from_reason(format!("Failed to parse input JSON string: {}", e))
         })?;
     let (input_level, parsed) = normalize_parsed_directory(parsed_input)?;
+    log::info!("Input level: {}", input_level);
 
     let format_config: FormatConfig = match json_format_config {
         Some(ref json) if !json.is_empty() => {
+            log::info!("Format config: {}", json);
             serde_json::from_str(json).map_err(|e| {
+                log::error!("Failed to parse format config JSON: {}", e);
                 napi::Error::from_reason(format!("Failed to parse format config JSON: {}", e))
             })?
         }
-        _ => FormatConfig::default(),
+        _ => {
+            log::info!("No format config provided, using defaults");
+            FormatConfig::default()
+        }
     };
 
     let output_root_dir = if input_level == 1 {
-        create_unique_subdir(
-            root_path,
-            &non_empty_or_default(&parsed.patient_name, "Unknown Patient"),
-        )?
+        let dir_name = non_empty_or_default(&parsed.patient_name, "Unknown Patient");
+        log::info!("Creating patient-level output directory: {}", dir_name);
+        create_unique_subdir(root_path, &dir_name)?
     } else {
+        log::info!("Using root directory as output (level={})", input_level);
         root_path.to_path_buf()
     };
 
     // Traverse studies in stable order.
+    let study_count = parsed.studies_in_order.len().max(parsed.studies.len());
+    log::info!("Processing {} study/(ies)", study_count);
     for study_ref in ordered_keys(&parsed.studies, &parsed.studies_in_order) {
         let study = parsed.studies.get(&study_ref.key).ok_or_else(|| {
+            log::error!("Study key not found: {}", study_ref.key);
             napi::Error::from_reason(format!("Study key not found in studies: {}", study_ref.key))
         })?;
 
+        let study_desc = non_empty_or_default(&study.study_description, "Unknown Study");
+        log::info!("Processing study: desc='{}', series_count={}", study_desc, study.series.len());
+
         let study_output_dir = if input_level <= 2 {
-            create_unique_subdir(
-                &output_root_dir,
-                &non_empty_or_default(&study.study_description, "Unknown Study"),
-            )?
+            create_unique_subdir(&output_root_dir, &study_desc)?
         } else {
             output_root_dir.clone()
         };
@@ -175,16 +193,23 @@ pub fn export_parsed_standard_directory(
         // Traverse series in stable order.
         for series_ref in ordered_keys(&study.series, &study.series_in_order) {
             let series = study.series.get(&series_ref.key).ok_or_else(|| {
+                log::error!("Series key not found: {}", series_ref.key);
                 napi::Error::from_reason(format!(
                     "Series key not found in series: {}",
                     series_ref.key
                 ))
             })?;
 
-            let series_dir_name = format!(
-                "{} #{}",
-                non_empty_or_default(&series.series_description, "Unknown Series"),
-                series.series_number
+            let series_desc = non_empty_or_default(&series.series_description, "Unknown Series");
+            let series_dir_name = format!("{} #{}", series_desc, series.series_number);
+            let instance_count = if !series.instances_in_order.is_empty() {
+                series.instances_in_order.len()
+            } else {
+                series.instances.len()
+            };
+            log::info!(
+                "Processing series: desc='{}', number={}, instances={}",
+                series_desc, series.series_number, instance_count
             );
 
             let series_output_dir = if input_level <= 3 {
@@ -196,29 +221,29 @@ pub fn export_parsed_standard_directory(
             // nifti
             // convert whole series to NIfTI and continue.
             if export_type == DeidentifyExportType::Nifti as u32 {
-                let instance_count = if !series.instances_in_order.is_empty() {
-                    series.instances_in_order.len()
-                } else {
-                    series.instances.len()
-                };
-
                 if instance_count <= 1 {
+                    log::error!(
+                        "NIfTI export skipped for series '{}' (#{}): only {} DICOM file(s).",
+                        series_desc, series.series_number, instance_count
+                    );
                     return Err(napi::Error::from_reason(format!(
                         "NIfTI export skipped for series '{}' (#{}): only {} DICOM file(s).",
-                        non_empty_or_default(&series.series_description, "Unknown Series"),
-                        series.series_number,
-                        instance_count
+                        series_desc, series.series_number, instance_count
                     )));
                 }
 
+                log::info!("Converting series to NIfTI: {} instances", instance_count);
                 export_series_to_nifti(series, &series_output_dir, &format_config)?;
+                log::info!("Series converted to NIfTI successfully: {}", series_output_dir.display());
                 continue;
             }
 
             // mp4
             // convert whole series to MP4 and continue.
             if export_type == DeidentifyExportType::Mp4 as u32 {
+                log::info!("Converting series to MP4: {} frames", instance_count);
                 export_series_to_mp4(series, &series_output_dir, &format_config)?;
+                log::info!("Series converted to MP4 successfully: {}", series_output_dir.display());
                 continue;
             }
 
@@ -226,6 +251,7 @@ pub fn export_parsed_standard_directory(
             // Types 0/100/101/300: process instance-by-instance.
             for instance_ref in ordered_keys(&series.instances, &series.instances_in_order) {
                 let instance = series.instances.get(&instance_ref.key).ok_or_else(|| {
+                    log::error!("Instance key not found: {}", instance_ref.key);
                     napi::Error::from_reason(format!(
                         "Instance key not found in instances: {}",
                         instance_ref.key
@@ -234,6 +260,7 @@ pub fn export_parsed_standard_directory(
 
                 let src = Path::new(&instance.file_path);
                 if !src.exists() {
+                    log::error!("Source file does not exist: {}", instance.file_path);
                     return Err(napi::Error::from_reason(format!(
                         "Source file does not exist: {}",
                         instance.file_path
@@ -241,10 +268,13 @@ pub fn export_parsed_standard_directory(
                 }
 
                 let dst = series_output_dir.join(&instance.file_name);
+                let file_name = &instance.file_name;
 
                 // copy
                 if export_type == DeidentifyExportType::Copy as u32 {
+                    log::info!("Copy: {} -> {}", file_name, dst.display());
                     fs::copy(src, &dst).map_err(|e| {
+                        log::error!("Failed to copy file '{}': {}", instance.file_path, e);
                         napi::Error::from_reason(format!(
                             "Failed to copy file from '{}' to '{}': {}",
                             instance.file_path,
@@ -257,23 +287,33 @@ pub fn export_parsed_standard_directory(
 
                 // tag de-identify
                 if export_type == DeidentifyExportType::TagDeidentify as u32 {
+                    log::info!("Tag de-identify: {}", file_name);
                     deidentify_2d_dicom(
                         instance.file_path.clone(),
                         dst.to_string_lossy().to_string(),
                         json_deid_config.clone(),
                     )
-                    .map_err(napi::Error::from_reason)?;
+                    .map_err(|e| {
+                        log::error!("Tag de-identify failed for '{}': {}", file_name, e);
+                        napi::Error::from_reason(e)
+                    })?;
+                    log::info!("Tag de-identify done: {}", file_name);
                     continue;
                 }
 
                 // tag + OCR de-identify
                 if export_type == DeidentifyExportType::TagOcrDeidentify as u32 {
+                    log::info!("Tag+OCR de-identify: {}", file_name);
                     deidentify_2d_dicom_with_ocr(
                         instance.file_path.clone(),
                         dst.to_string_lossy().to_string(),
                         json_deid_config.clone(),
                     )
-                    .map_err(napi::Error::from_reason)?;
+                    .map_err(|e| {
+                        log::error!("Tag+OCR de-identify failed for '{}': {}", file_name, e);
+                        napi::Error::from_reason(e)
+                    })?;
+                    log::info!("Tag+OCR de-identify done: {}", file_name);
                     continue;
                 }
 
@@ -285,10 +325,13 @@ pub fn export_parsed_standard_directory(
                         .unwrap_or_else(|| non_empty_or_default(&instance.file_name, "instance"));
                     let img_file_name = format!("{}.jpg", base_name);
                     let img_dst = series_output_dir.join(img_file_name);
+                    log::info!("JPEG export: {} -> {}", file_name, img_dst.display());
                     run_dcm2img_jpeg(src, &img_dst)?;
+                    log::info!("JPEG export done: {}", file_name);
                     continue;
                 }
 
+                log::error!("Invalid export type: {}", export_type);
                 return Err(napi::Error::from_reason(format!(
                     "Invalid export type: {}. ",
                     export_type
@@ -297,7 +340,9 @@ pub fn export_parsed_standard_directory(
         }
     }
 
-    Ok(output_root_dir.to_string_lossy().to_string())
+    let result = output_root_dir.to_string_lossy().to_string();
+    log::info!("Export completed successfully: {}", result);
+    Ok(result)
 }
 
 /// Normalizes parsed directory input to ensure consistent structure and valid level (1-4).
@@ -306,7 +351,11 @@ fn normalize_parsed_directory(
 ) -> napi::Result<(u8, ParsedDirectoryJson)> {
     let level = if input.level == 0 { 1 } else { input.level };
 
+    log::info!("Normalizing input: level={}, patient='{}', study='{}'",
+        level, input.patient_name, input.study_description);
+
     if !(1..=4).contains(&level) {
+        log::error!("Invalid input level: {}", level);
         return Err(napi::Error::from_reason(format!(
             "Invalid input level: {}. Use 1 (patient), 2 (study), 3 (series), or 4 (instance).",
             level
@@ -314,6 +363,7 @@ fn normalize_parsed_directory(
     }
 
     if level == 1 {
+        log::info!("Level 1 (patient): keeping structure as-is");
         return Ok((level, input));
     }
 
@@ -461,11 +511,16 @@ fn export_series_to_nifti(
     series_dir: &Path,
     format_config: &FormatConfig,
 ) -> napi::Result<()> {
+    let instance_count = series.instances_in_order.len();
+    log::info!("Exporting {} instance(s) to NIfTI: output_dir={}",
+        instance_count, series_dir.display());
+
     let temp_input_dir = create_temp_series_input_dir()?;
 
     let convert_result = (|| -> napi::Result<()> {
         for (index, instance_ref) in series.instances_in_order.iter().enumerate() {
             let instance = series.instances.get(&instance_ref.key).ok_or_else(|| {
+                log::error!("Instance key not found: {}", instance_ref.key);
                 napi::Error::from_reason(format!(
                     "Instance key not found in instances: {}",
                     instance_ref.key
@@ -474,21 +529,21 @@ fn export_series_to_nifti(
 
             let src = Path::new(&instance.file_path);
             if !src.exists() {
+                log::error!("Source file does not exist: {}", instance.file_path);
                 return Err(napi::Error::from_reason(format!(
                     "Source file does not exist: {}",
                     instance.file_path
                 )));
             }
 
-            let temp_name = format!(
-                "{:08}_{}",
-                index,
-                non_empty_or_default(&instance.file_name, "instance.dcm")
-            );
+            let file_name = non_empty_or_default(&instance.file_name, "instance.dcm");
+            let temp_name = format!("{:08}_{}", index, file_name);
             let temp_dst = temp_input_dir.join(temp_name);
+            log::info!("Decompressing frame {}/{}", index + 1, instance_count);
             run_dcmdjpeg(src, &temp_dst)?;
         }
 
+        log::info!("All frames decompressed, running dcm2niix");
         run_dcm2niix(&temp_input_dir, series_dir, format_config)
     })();
 
@@ -496,6 +551,9 @@ fn export_series_to_nifti(
         let _ = fs::remove_dir_all(&temp_input_dir);
     }
 
+    if convert_result.is_ok() {
+        log::info!("NIfTI export completed successfully");
+    }
     convert_result
 }
 
@@ -550,11 +608,18 @@ fn create_temp_series_frames_dir() -> napi::Result<PathBuf> {
 /// Converts one series into a single MP4 file by generating ordered JPEG frames
 /// with dcm2img and then encoding them with ffmpeg.
 fn export_series_to_mp4(series: &SeriesNode, series_dir: &Path, format_config: &FormatConfig) -> napi::Result<()> {
+    let frame_count = series.instances_in_order.len();
+    let fps = format_config.fps.unwrap_or(24);
+    let quality = format_config.quality.as_deref().unwrap_or("medium");
+    log::info!("Exporting {} frame(s) to MP4: fps={}, quality={}, output_dir={}",
+        frame_count, fps, quality, series_dir.display());
+
     let temp_frames_dir = create_temp_series_frames_dir()?;
 
     let convert_result = (|| -> napi::Result<()> {
         for (index, instance_ref) in series.instances_in_order.iter().enumerate() {
             let instance = series.instances.get(&instance_ref.key).ok_or_else(|| {
+                log::error!("Instance key not found: {}", instance_ref.key);
                 napi::Error::from_reason(format!(
                     "Instance key not found in instances: {}",
                     instance_ref.key
@@ -563,6 +628,7 @@ fn export_series_to_mp4(series: &SeriesNode, series_dir: &Path, format_config: &
 
             let src = Path::new(&instance.file_path);
             if !src.exists() {
+                log::error!("Source file does not exist: {}", instance.file_path);
                 return Err(napi::Error::from_reason(format!(
                     "Source file does not exist: {}",
                     instance.file_path
@@ -570,10 +636,12 @@ fn export_series_to_mp4(series: &SeriesNode, series_dir: &Path, format_config: &
             }
 
             let frame_dst = temp_frames_dir.join(format!("{:08}.jpg", index));
+            log::info!("Converting frame {}/{}", index + 1, frame_count);
             run_dcm2img_jpeg(src, &frame_dst)?;
         }
 
         let mp4_output = series_dir.join("series.mp4");
+        log::info!("Encoding {} JPEG frames to MP4: {}", frame_count, mp4_output.display());
         run_ffmpeg_jpeg_to_mp4(&temp_frames_dir, &mp4_output, format_config)
     })();
 
@@ -581,6 +649,9 @@ fn export_series_to_mp4(series: &SeriesNode, series_dir: &Path, format_config: &
         let _ = fs::remove_dir_all(&temp_frames_dir);
     }
 
+    if convert_result.is_ok() {
+        log::info!("MP4 export completed successfully");
+    }
     convert_result
 }
 
@@ -592,6 +663,9 @@ fn run_dcm2niix(
 ) -> napi::Result<()> {
     let binary_path = resolve_dcm2niix_path()?;
 
+    log::info!("Running: binary={}, input={}, output={}",
+        binary_path.display(), input_dir.display(), output_dir.display());
+
     let mut cmd = new_hidden_command(&binary_path);
     cmd.arg("-o").arg(output_dir).arg("-z").arg("y");
 
@@ -599,15 +673,17 @@ fn run_dcm2niix(
     // -m n = do not merge, each slice exported as separate 3D volume
     // -m y = merge all slices into a single 4D volume
     // dcm2niix default is -m 2 (auto-merge)
+    let structure = format_config.structure.as_deref().unwrap_or("default");
     match format_config.structure.as_deref() {
-        Some("3d") => { cmd.arg("-m").arg("n"); }
-        Some("4d") => { cmd.arg("-m").arg("y"); }
-        _ => {}
+        Some("3d") => { cmd.arg("-m").arg("n"); log::info!("Structure: 3d (individual volumes)"); }
+        Some("4d") => { cmd.arg("-m").arg("y"); log::info!("Structure: 4d (merged volume)"); }
+        _ => { log::info!("Structure: {} (auto)", structure); }
     }
 
     cmd.arg(input_dir);
 
     let output = cmd.output().map_err(|e| {
+        log::error!("Failed to execute binary '{}': {}", binary_path.display(), e);
         napi::Error::from_reason(format!(
             "Failed to execute dcm2niix '{}': {}",
             binary_path.to_string_lossy(),
@@ -618,6 +694,8 @@ fn run_dcm2niix(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
+        log::error!("Failed (code={:?}): stdout={}, stderr={}",
+            output.status.code(), stdout, stderr);
         return Err(napi::Error::from_reason(format!(
             "dcm2niix failed (code: {:?})\nstdout: {}\nstderr: {}",
             output.status.code(),
@@ -626,6 +704,7 @@ fn run_dcm2niix(
         )));
     }
 
+    log::info!("Completed successfully");
     Ok(())
 }
 
@@ -638,12 +717,16 @@ fn run_dcmdjpeg(
     let binary_path = resolve_dcmtk_bin_path("dcmdjpeg")?;
     let dictionary_path = resolve_dcmtk_dictionary_path()?;
 
+    log::info!("Decompressing: input={}, output={}",
+        input_path.display(), output_path.display());
+
     let output = new_hidden_command(&binary_path)
         .env("DCMDICTPATH", &dictionary_path)
         .arg(input_path)
         .arg(output_path)
         .output()
         .map_err(|e| {
+            log::error!("Failed to execute binary '{}': {}", binary_path.display(), e);
             napi::Error::from_reason(format!(
                 "Failed to execute dcmdjpeg '{}': {}",
                 binary_path.to_string_lossy(),
@@ -654,6 +737,8 @@ fn run_dcmdjpeg(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
+        log::error!("Failed (code={:?}): stdout={}, stderr={}",
+            output.status.code(), stdout, stderr);
         return Err(napi::Error::from_reason(format!(
       "dcmdjpeg failed (code: {:?}) for input '{}' and output '{}' using DCMDICTPATH='{}'\nstdout: {}\nstderr: {}",
       output.status.code(),
@@ -665,6 +750,7 @@ fn run_dcmdjpeg(
     )));
     }
 
+    log::info!("Completed successfully");
     Ok(())
 }
 
@@ -676,7 +762,11 @@ fn run_dcm2img_jpeg(
     let binary_path = resolve_dcmtk_bin_path("dcm2img")?;
     let dictionary_path = resolve_dcmtk_dictionary_path()?;
 
+    log::info!("Converting to JPEG: input={}, output={}",
+        input_path.display(), output_path.display());
+
     // try +Wi 1
+    log::info!("Attempt 1: +Wi 1 (VOI window)");
     let try_with_voi_window = new_hidden_command(&binary_path)
         .env("DCMDICTPATH", &dictionary_path)
         .arg("+Wi")
@@ -686,6 +776,7 @@ fn run_dcm2img_jpeg(
         .arg(output_path)
         .output()
         .map_err(|e| {
+            log::error!("Failed to execute binary '{}': {}", binary_path.display(), e);
             napi::Error::from_reason(format!(
                 "Failed to execute dcm2img '{}': {}",
                 binary_path.to_string_lossy(),
@@ -694,8 +785,11 @@ fn run_dcm2img_jpeg(
         })?;
 
     if try_with_voi_window.status.success() {
+        log::info!("Completed successfully (method: +Wi 1)");
         return Ok(());
     }
+
+    log::warn!("+Wi 1 failed (code={:?}), retrying with +Wm", try_with_voi_window.status.code());
 
     // try +Wm
     let try_with_min_max = new_hidden_command(&binary_path)
@@ -706,6 +800,7 @@ fn run_dcm2img_jpeg(
         .arg(output_path)
         .output()
         .map_err(|e| {
+            log::error!("Failed to execute binary '{}': {}", binary_path.display(), e);
             napi::Error::from_reason(format!(
                 "Failed to execute dcm2img '{}': {}",
                 binary_path.to_string_lossy(),
@@ -719,6 +814,7 @@ fn run_dcm2img_jpeg(
         let stderr_minmax = String::from_utf8_lossy(&try_with_min_max.stderr);
         let stdout_minmax = String::from_utf8_lossy(&try_with_min_max.stdout);
 
+        log::error!("Both attempts failed");
         return Err(napi::Error::from_reason(format!(
       "dcm2img failed for input '{}' and output '{}' using DCMDICTPATH='{}'.\nAttempt 1 (+Wi 1) code: {:?}\nstdout: {}\nstderr: {}\nAttempt 2 (+Wm) code: {:?}\nstdout: {}\nstderr: {}",
       input_path.to_string_lossy(),
@@ -733,6 +829,7 @@ fn run_dcm2img_jpeg(
     )));
     }
 
+    log::info!("Completed successfully (method: +Wm)");
     Ok(())
 }
 
@@ -751,6 +848,9 @@ fn run_ffmpeg_jpeg_to_mp4(
         Some("low")  => ("libx265", vec!["-crf", "28", "-preset", "medium", "-tag:v", "hvc1"]),
         _            => ("libx264", vec!["-crf", "23", "-preset", "medium"]),
     };
+
+    log::info!("Encoding: fps={}, codec={}, quality={:?}, output={}",
+        fps, codec, format_config.quality.as_deref().unwrap_or("medium"), output_mp4_path.display());
 
     let ffmpeg_path = resolve_ffmpeg_path()?;
     let mut cmd = new_hidden_command(&ffmpeg_path);
@@ -783,6 +883,8 @@ fn run_ffmpeg_jpeg_to_mp4(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
+        log::error!("Failed (code={:?}): stdout={}, stderr={}",
+            output.status.code(), stdout, stderr);
         return Err(napi::Error::from_reason(format!(
             "ffmpeg failed (code: {:?}) for input '{}' and output '{}'
 stdout: {}
@@ -795,6 +897,7 @@ stderr: {}",
         )));
     }
 
+    log::info!("Encoding completed successfully");
     Ok(())
 }
 
@@ -811,7 +914,14 @@ fn create_unique_subdir(parent: &Path, base_name: &str) -> napi::Result<PathBuf>
         suffix += 1;
     }
 
+    if suffix > 1 {
+        log::info!("Creating directory (with suffix): {}", candidate.display());
+    } else {
+        log::info!("Creating directory: {}", candidate.display());
+    }
+
     fs::create_dir_all(&candidate).map_err(|e| {
+        log::error!("Failed to create directory '{}': {}", candidate.display(), e);
         napi::Error::from_reason(format!(
             "Failed to create directory '{}': {}",
             candidate.to_string_lossy(),

@@ -80,6 +80,7 @@ export default {
     getDeidTable: async (...args) => apiReady.then(api => apiLoader.run(api.getDeidTable)(...args)),
 
     exportParsedStandardDirectory: async (...args) => apiReady.then(api => apiLoader.run(api.exportParsedStandardDirectory)(...args)),
+    exportMultimodalData: async (...args) => apiReady.then(api => apiLoader.run(api.exportMultimodalData)(...args)),
     // deidentify2DDicom: async (...args) => apiReady.then(api => apiLoader.run(api.deidentify2DDicom)(...args)),
 
     // ...

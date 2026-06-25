@@ -166,6 +166,15 @@
           </div>
         </div>
 
+        <!-- Multimodal data export -->
+        <label class="flex flex-col mt-4">
+          <span class="font-medium text-slate-200">Export multimodal data</span>
+          <select x-model="multimodalExport" class="bg-slate-800 border-slate-500 rounded mt-1">
+            <option value="none">No export</option>
+            <option value="standard">Standard export</option>
+          </select>
+        </label>
+
       </form>
       </div>
 
@@ -318,6 +327,8 @@
           mp4Fps: 24,
           mp4Quality: 'medium',
 
+          multimodalExport: 'none',
+
           exportRootDir: '',
           exporting: false,
           async runExport() {
@@ -375,6 +386,21 @@
 
             const res = await $electron?.api('@pmt/export/exportParsedStandardDirectory', jsonUtf8Content, exportRootDir, exportType, deidConfigStr, jsonFormatConfig);
               if (res && typeof res === 'string') {
+                // After main export, run multimodal data export if enabled
+                if (this.multimodalExport === 'standard' && payload?.root) {
+                  try {
+                    const multimodalResultStr = await $electron?.api('@pmt/export/exportMultimodalData', payload.root, res, jsonUtf8Content);
+                    if (multimodalResultStr && typeof multimodalResultStr === 'string') {
+                      const multimodalResult = JSON.parse(multimodalResultStr);
+                      console.log('Multimodal export result:', multimodalResult);
+                      if (!multimodalResult.success && multimodalResult.errors?.length > 0) {
+                        console.warn('Multimodal export had errors:', multimodalResult.errors);
+                      }
+                    }
+                  } catch (mmErr) {
+                    console.error('Multimodal export failed:', mmErr);
+                  }
+                }
                 $electron?.showInFolder(res);
               }
             } catch (err) {
