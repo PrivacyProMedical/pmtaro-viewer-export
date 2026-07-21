@@ -16,6 +16,7 @@
       display: flex;
       flex-direction: column;
     }
+
     #app {
       position: relative;
       overflow: auto;
@@ -26,10 +27,16 @@
   <div id="app" x-data="app" class="flex flex-col" style="height: 100%; min-width: 400px">
     <div class="flex-1 overflow-auto p-3">
       <form class="flex flex-col" style="min-width: 400px" @submit.prevent="runExport">
-        <label class="flex flex-col mt-4">
-          <span>Export</span>
-          <input type="text" x-model="selectionName" readonly id="dropzone" :class="dragHover ? 'bg-slate-700' : 'bg-slate-800'" class="border-slate-500 rounded mt-1" placeholder="Drop target here…" />
-        </label>
+        <div class="flex flex-col mt-4">
+          <div class="flex items-center justify-between">
+            <label for="dropzone">Export</label>
+            <label class="inline-flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" x-model="exportAllData" x-init="exportAllData && setPayload(null)" @change="setPayload(null)" class="accent-sky-500 rounded shrink-0" />
+              <span>Select All</span>
+            </label>
+          </div>
+          <input id="dropzone" type="text" x-model="selectionName" readonly :class="dragHover ? 'bg-slate-700' : 'bg-slate-800'" class="border-slate-500 rounded mt-1" :placeholder="exportAllData ? 'All data…' : 'Drop target here…'" :disabled="exportAllData" />
+        </div>
         <label class="flex flex-col mt-4">
           <span>To</span>
           <input type="text" x-model="exportRootDir" readonly class="bg-slate-800 border-slate-500 rounded mt-1" placeholder="Output path" :title="exportRootDir" @click="selectExportRootDir()" />
@@ -43,17 +50,14 @@
           </select>
         </label>
 
-        <div class="mt-4 border border-slate-600 rounded p-3 min-h-[80px] flex flex-col justify-center">
-
+        <div class="mt-4 border border-slate-600 rounded p-3 min-h-20 flex flex-col justify-center">
           <div x-show="selectedFormat === &apos;dicom&apos;" class="flex flex-col gap-1.5 text-sm">
             <label class="flex items-center gap-2 cursor-pointer select-none">
-              <input type="checkbox" x-model="dicomAnonymizeTags" @change="if(!dicomAnonymizeTags){ dicomOcrAnonymize=false; dicomCustomizeDeid=false; }" class="accent-sky-500 rounded shrink-0" />
+              <input type="checkbox" x-model="dicomAnonymizeTags" class="accent-sky-500 rounded shrink-0" @change="if(!dicomAnonymizeTags){ dicomOcrAnonymize=false; dicomCustomizeDeid=false; }" />
               <span>Anonymize Tags</span>
             </label>
-            <label class="flex items-center gap-2 cursor-pointer select-none"
-                   :class="dicomAnonymizeTags ? &apos;&apos; : &apos;opacity-50 pointer-events-none&apos;">
-              <input type="checkbox" x-model="dicomOcrAnonymize" class="accent-sky-500 rounded shrink-0"
-                     :disabled="!dicomAnonymizeTags" />
+            <label class="flex items-center gap-2 cursor-pointer select-none" :class="dicomAnonymizeTags ? &apos;&apos; : &apos;opacity-50 pointer-events-none&apos;">
+              <input type="checkbox" x-model="dicomOcrAnonymize" class="accent-sky-500 rounded shrink-0" :disabled="!dicomAnonymizeTags" />
               <span>OCR Anonymize</span>
             </label>
           </div>
@@ -85,108 +89,116 @@
             <div x-show="moreFormat === &apos;mp4&apos;" class="flex flex-col gap-1.5 text-sm">
               <div class="flex items-center gap-2">
                 <span class="w-28 shrink-0">Frame Rate</span>
-                <input type="number" x-model.number="mp4Fps" min="1" max="120"
-                       class="bg-slate-800 border-slate-500 rounded text-xs w-20 px-2 py-1" />
+                <input type="number" x-model.number="mp4Fps" min="1" max="120" class="bg-slate-800 border-slate-500 rounded text-xs w-20 px-2 py-1" />
                 <span class="text-xs text-slate-400">FPS</span>
               </div>
               <div class="flex items-center gap-2">
                 <span class="w-28 shrink-0">Encoding Quality</span>
                 <select x-model="mp4Quality" class="bg-slate-800 border-slate-500 rounded text-xs flex-1">
-                <option value="high">High</option>
-                <option value="medium">Medium</option>
-                <option value="low">Low</option>
-              </select>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+              </div>
             </div>
           </div>
-        </div>
 
-        <!-- Label filter — shown when selection has descendants and labels are defined -->
-        <!-- De-identification configuration -->
-        <div class="flex flex-col mt-4" x-show="showDeidConfig" x-data="deidConfigData()">
-          <label class="flex items-center gap-2 cursor-pointer select-none text-sm">
-            <input type="checkbox" x-model="enabled" class="accent-sky-500 rounded" />
-            <span class="font-medium">Customize de-identification</span>
-          </label>
-          <div x-show="enabled" class="mt-2 bg-slate-800 border border-slate-600 rounded p-2 max-h-96 overflow-hidden flex flex-col">
-            <div class="flex gap-1 mb-1 shrink-0">
-              <input type="text" x-model="searchQuery" placeholder="Search tag or name&#8230;" class="bg-slate-700 border-slate-500 rounded text-xs px-2 py-1 w-full" />
-              <span class="text-xs text-slate-400 whitespace-nowrap self-center" x-text="filteredCount() + ' / ' + tableData.length"></span>
+          <!-- Label filter — shown when selection has descendants and labels are defined -->
+          <!-- De-identification configuration -->
+          <div class="flex flex-col mt-4" x-show="showDeidConfig" x-data="deidConfigData()">
+            <label class="flex items-center gap-2 cursor-pointer select-none text-sm">
+              <input type="checkbox" x-model="enabled" class="accent-sky-500 rounded" />
+              <span class="font-medium">Customize de-identification</span>
+            </label>
+            <div x-show="enabled" class="mt-2 bg-slate-800 border border-slate-600 rounded p-2 max-h-96 overflow-hidden flex flex-col">
+              <div class="flex gap-1 mb-1 shrink-0">
+                <input type="text" x-model="searchQuery" placeholder="Search tag or name&#8230;" class="bg-slate-700 border-slate-500 rounded text-xs px-2 py-1 w-full" />
+                <span class="text-xs text-slate-400 whitespace-nowrap self-center" x-text="filteredCount() + ' / ' + tableData.length"></span>
+              </div>
+              <div class="flex gap-1 text-xs text-slate-400 font-medium mb-1 px-1 shrink-0">
+                <span class="w-32">Tag</span>
+                <span class="flex-1 min-w-0">Name</span>
+                <span class="w-20 text-right">Action</span>
+              </div>
+              <div class="overflow-y-auto flex-1 space-y-1">
+                <template x-for="(row, i) in filteredTags" :key="row.tag + i">
+                  <div class="flex gap-1 items-center text-xs px-1 py-0.5 rounded">
+                    <span class="w-32 font-mono text-slate-300 truncate" x-text="row.tag"></span>
+                    <span class="flex-1 min-w-0 truncate text-slate-300" x-text="row.name"></span>
+                    <select x-model="overrides[row.tag]"
+                      class="bg-slate-700 border-slate-500 rounded text-xs px-1 py-0.5 w-20">
+                      <option :value="null">
+                        Default <span class="tabular-nums" x-text="(`${row.action.split('/')[0]}`)"></span>
+                      </option>
+                      <option value="K">
+                        <span class="tabular-nums">(K)</span> Keep
+                      </option>
+                      <option value="X">
+                        <span class="tabular-nums">(X)</span> Remove
+                      </option>
+                      <option value="Z">
+                        <span class="tabular-nums">(Z)</span> Zero
+                      </option>
+                      <option value="D">
+                        <span class="tabular-nums">(D)</span> Dummy
+                      </option>
+                      <option value="U">
+                        <span class="tabular-nums">(U)</span> UID
+                      </option>
+                    </select>
+                  </div>
+                </template>
+              </div>
+              <div class="flex justify-between items-center mt-1 pt-1 border-t border-slate-700 shrink-0">
+                <span class="text-xs text-slate-400" x-text="customizedCount() > 0 ? customizedCount() + ' tag(s) customized' : 'Using default configuration'"></span>
+                <button type="button" @click="resetOverrides()" class="text-xs text-sky-400 hover:text-sky-300" x-show="customizedCount() > 0">Reset all</button>
+              </div>
             </div>
-            <div class="flex gap-1 text-xs text-slate-400 font-medium mb-1 px-1 shrink-0">
-              <span class="w-32">Tag</span>
-              <span class="flex-1 min-w-0">Name</span>
-              <span class="w-20 text-right">Action</span>
-            </div>
-            <div class="overflow-y-auto flex-1 space-y-1">
-              <template x-for="(row, i) in filteredTags" :key="row.tag + i">
-                <div class="flex gap-1 items-center text-xs px-1 py-0.5 rounded">
-                  <span class="w-32 font-mono text-slate-300 truncate" x-text="row.tag"></span>
-                  <span class="flex-1 min-w-0 truncate text-slate-300" x-text="row.name"></span>
-                  <select x-model="overrides[row.tag]" class="bg-slate-700 border-slate-500 rounded text-xs px-1 py-0.5 w-20">
-                    <option :value="null">Default (<span x-text="row.action.split('/')[0]"></span>)</option>
-                    <option value="K">Keep (K)</option>
-                    <option value="X">Remove (X)</option>
-                    <option value="Z">Zero (Z)</option>
-                    <option value="D">Dummy (D)</option>
-                    <option value="U">UID (U)</option>
-                  </select>
-                </div>
+          </div>
+          <div class="flex flex-col mt-4" x-show="Object.keys(allLabels).length > 0 && (exportAllData || (selection && selection.slot !== 'instance'))">
+            <span>Filter by Labels</span>
+            <div class="flex flex-col gap-1 mt-1 bg-slate-800 border border-slate-500 rounded p-2 max-h-36 overflow-y-auto">
+              <template x-for="entry in Object.entries(allLabels)" :key="entry[0]">
+                <label class="flex items-center gap-2 cursor-pointer select-none">
+                  <input type="checkbox" :value="entry[0]" x-model="filterLabels" class="accent-sky-500 shrink-0 rounded" />
+                  <span class="inline-block w-3 h-3 rounded-full shrink-0" :style="`background-color: ${entry[1]}`"></span>
+                  <span x-text="entry[0]" class="text-sm truncate"></span>
+                </label>
               </template>
             </div>
-            <div class="flex justify-between items-center mt-1 pt-1 border-t border-slate-700 shrink-0">
-              <span class="text-xs text-slate-400" x-text="customizedCount() > 0 ? customizedCount() + ' tag(s) customized' : 'Using default configuration'"></span>
-              <button type="button" @click="resetOverrides()" class="text-xs text-sky-400 hover:text-sky-300" x-show="customizedCount() > 0">Reset all</button>
+            <div class="flex gap-2 mt-2" x-show="filterLabels.length > 0">
+              <button type="button" @click="filterMode = 'include'" :class="filterMode === 'include' ? 'bg-green-600 text-white' : 'bg-slate-700 text-slate-300'" class="flex-1 px-2 py-1 rounded text-sm transition-colors">
+                Include only
+              </button>
+              <button type="button" @click="filterMode = 'exclude'" :class="filterMode === 'exclude' ? 'bg-red-600 text-white' : 'bg-slate-700 text-slate-300'" class="flex-1 px-2 py-1 rounded text-sm transition-colors">
+                Exclude
+              </button>
             </div>
           </div>
-        </div>
-        <div class="flex flex-col mt-4" x-show="selection && selection.slot !== 'instance' && Object.keys(allLabels).length > 0">
-          <span>Filter by Labels</span>
-          <div class="flex flex-col gap-1 mt-1 bg-slate-800 border border-slate-500 rounded p-2 max-h-36 overflow-y-auto">
-            <template x-for="entry in Object.entries(allLabels)" :key="entry[0]">
-              <label class="flex items-center gap-2 cursor-pointer select-none">
-                <input type="checkbox" :value="entry[0]" x-model="filterLabels" class="accent-sky-500 shrink-0 rounded" />
-                <span class="inline-block w-3 h-3 rounded-full shrink-0" :style="`background-color: ${entry[1]}`"></span>
-                <span x-text="entry[0]" class="text-sm truncate"></span>
-              </label>
-            </template>
-          </div>
-          <div class="flex gap-2 mt-2" x-show="filterLabels.length > 0">
-            <button type="button"
-              @click="filterMode = 'include'"
-              :class="filterMode === 'include' ? 'bg-green-600 text-white' : 'bg-slate-700 text-slate-300'"
-              class="flex-1 px-2 py-1 rounded text-sm transition-colors">
-              Include only
-            </button>
-            <button type="button"
-              @click="filterMode = 'exclude'"
-              :class="filterMode === 'exclude' ? 'bg-red-600 text-white' : 'bg-slate-700 text-slate-300'"
-              class="flex-1 px-2 py-1 rounded text-sm transition-colors">
-              Exclude
-            </button>
-          </div>
-        </div>
 
-        <!-- Multimodal data export -->
-        <label class="flex flex-col mt-4">
-          <span class="font-medium text-slate-200">Export multimodal data</span>
-          <select x-model="multimodalExport" class="bg-slate-800 border-slate-500 rounded mt-1">
-            <option value="none">No export</option>
-            <option value="standard">Standard export</option>
-          </select>
-        </label>
-
+          <!-- Multimodal data export -->
+          <label class="flex flex-col mt-4">
+            <span class="font-medium text-slate-200">Export multimodal data</span>
+            <select x-model="multimodalExport" class="bg-slate-800 border-slate-500 rounded mt-1">
+              <option value="none">No export</option>
+              <option value="standard">Standard export</option>
+            </select>
+          </label>
       </form>
-      </div>
+    </div>
 
-      <div class="bg-slate-800 border-t border-slate-600 p-3">
-        <button type="button" @click="runExport" class="flex justify-center items-center text-center bg-sky-600 px-3 py-2 rounded w-full hover:cursor-pointer disabled:cursor-not-allowed disabled:bg-sky-300/30 disabled:text-gray-300" :disabled="!selection || !exportRootDir || exporting">
-          <template x-if="exporting">
-            <svg class="mr-3 -ml-1 size-5 animate-spin text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-          </template>
-          <span x-text="exporting ? 'Exporting\u2026' : 'Export'"></span>
-        </button>
-      </div>
-
+    <div class="bg-slate-800 border-t border-slate-600 p-3">
+      <button type="button" @click="runExport" class="flex justify-center items-center text-center bg-sky-600 px-3 py-2 rounded w-full hover:cursor-pointer disabled:cursor-not-allowed disabled:bg-sky-300/30 disabled:text-gray-300" :disabled="(!exportAllData && !selection) || !exportRootDir || exporting">
+        <template x-if="exporting">
+          <svg class="mr-3 -ml-1 size-5 animate-spin text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z">
+            </path>
+          </svg>
+        </template>
+        <span x-text="exporting ? 'Exporting\u2026' : 'Export'"></span>
+      </button>
+    </div>
   </div>
 
   <script src="./alpinejs@3.15.8/dist/cdn.min.js" defer></script>
@@ -287,8 +299,16 @@
             if (payload?.root) {
               $electron?.getLabels().then(labels => { this.allLabels = labels ?? {}; });
               $electron?.getLabelingForRoot(payload.root).then(rows => { this.labelingRows = rows ?? []; });
+            } else if (this.exportAllData) {
+              $electron?.getLabels().then(labels => { this.allLabels = labels ?? {}; });
+              this.labelingRows = [];
+            }
+            if (payload) {
+              this.exportAllData = false;
             }
           },
+
+          exportAllData: true,
 
           dragHover: false,
           dragTimeout: null,
@@ -339,7 +359,31 @@
             let selectionToExport = payload?.selection;
 
             // Apply label filter for non-instance slots
-            if (selectionToExport?.slot !== 'instance' && this.filterLabels.length > 0) {
+            if (this.exportAllData) {
+              const selections = [];
+              const fullPayload = await $electron.getFullParsedTreePayload();
+              if (Array.isArray(fullPayload) && fullPayload.length > 0) {
+                for (let i = 0; i < fullPayload.length; i++) {
+                  const payload = fullPayload[i];
+                  let selection = payload?.selection;
+
+                  if (!selection) continue;
+                  const labelingRows = await $electron?.getLabelingForRoot(payload.root);
+
+                  // Apply label filter for non-instance slots
+                  if (selection?.slot !== 'instance' && this.filterLabels.length > 0) {
+                    selection = filterSelectionByLabels(
+                      payload,
+                      labelingRows,
+                      new Set(this.filterLabels),
+                      this.filterMode
+                    );
+                  }
+                  selections.push(selection);
+                }
+              }
+              selectionToExport = selections;
+            } else if (selectionToExport?.slot !== 'instance' && this.filterLabels.length > 0) {
               selectionToExport = filterSelectionByLabels(
                 payload,
                 this.labelingRows,
@@ -365,40 +409,50 @@
                     deidConfigStr = JSON.stringify(clean);
                   }
                 }
-              } catch(e) {
+              } catch (e) {
                 console.warn('Failed to read deid config:', e);
               }
             }
 
             try {
-                          // Build format-specific config
-            let jsonFormatConfig = null;
-            if (this.selectedFormat === 'nifti') {
-              jsonFormatConfig = JSON.stringify({
-                structure: this.niftiStructure,
-              });
-            } else if (this.selectedFormat === 'more' && this.moreFormat === 'mp4') {
-              jsonFormatConfig = JSON.stringify({
-                fps: this.mp4Fps,
-                quality: this.mp4Quality,
-              });
-            }
+              // Build format-specific config
+              let jsonFormatConfig = null;
+              if (this.selectedFormat === 'nifti') {
+                jsonFormatConfig = JSON.stringify({
+                  structure: this.niftiStructure,
+                });
+              } else if (this.selectedFormat === 'more' && this.moreFormat === 'mp4') {
+                jsonFormatConfig = JSON.stringify({
+                  fps: this.mp4Fps,
+                  quality: this.mp4Quality,
+                });
+              }
 
-            const res = await $electron?.api('@pmt/export/exportParsedStandardDirectory', jsonUtf8Content, exportRootDir, exportType, deidConfigStr, jsonFormatConfig);
+              const res = await $electron?.api(
+                '@pmt/export/exportParsedStandardDirectory',
+                jsonUtf8Content,
+                exportRootDir,
+                exportType,
+                deidConfigStr,
+                jsonFormatConfig
+              );
               if (res && typeof res === 'string') {
                 // After main export, run multimodal data export if enabled
-                if (this.multimodalExport === 'standard' && payload?.root) {
-                  try {
-                    const multimodalResultStr = await $electron?.api('@pmt/export/exportMultimodalData', payload.root, res, jsonUtf8Content);
-                    if (multimodalResultStr && typeof multimodalResultStr === 'string') {
-                      const multimodalResult = JSON.parse(multimodalResultStr);
-                      console.log('Multimodal export result:', multimodalResult);
-                      if (!multimodalResult.success && multimodalResult.errors?.length > 0) {
-                        console.warn('Multimodal export had errors:', multimodalResult.errors);
+                if (this.multimodalExport === 'standard') {
+                  const roots = payload?.root ? [payload.root] : exportAllData && Array.isArray(selectionToExport) ? selectionToExport.map(p => p.root).filter(r => r) : [];
+                  for (const root of roots) {
+                    try {
+                      const multimodalResultStr = await $electron?.api('@pmt/export/exportMultimodalData', root, res, jsonUtf8Content);
+                      if (multimodalResultStr && typeof multimodalResultStr === 'string') {
+                        const multimodalResult = JSON.parse(multimodalResultStr);
+                        console.log('Multimodal export result:', multimodalResult);
+                        if (!multimodalResult.success && multimodalResult.errors?.length > 0) {
+                          console.warn('Multimodal export had errors:', multimodalResult.errors);
+                        }
                       }
+                    } catch (mmErr) {
+                      console.error('Multimodal export failed:', mmErr);
                     }
-                  } catch (mmErr) {
-                    console.error('Multimodal export failed:', mmErr);
                   }
                 }
                 $electron?.showInFolder(res);
@@ -503,7 +557,7 @@
         if (payload?.from === 'patient' && payload.selection) {
           data.setPayload(payload);
         }
-      } catch (err) {}
+      } catch (err) { }
     });
 
     async function selectExportRootDir() {
@@ -517,11 +571,13 @@
       }
     }
 
+    /*
     function test() {
       $electron?.api('@pmt/export/test', ...arguments).then(res => {
         console.debug('api invoke:', "`@pmt/export/test`", res);
       });
     }
+    */
   </script>
 </body>
 </html>
